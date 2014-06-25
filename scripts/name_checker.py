@@ -21,6 +21,7 @@ if os.path.exists(file_handle):
 			else:
 				new_line = line
 			new_line.replace(":","_")
+			new_line.replace(">",">UNK|")
 			fix.write(new_line)
 		else:
 			fix.write(line)
