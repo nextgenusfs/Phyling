@@ -1,34 +1,39 @@
 #/bin/bash
 #Stephen Bolaris v1.0
 
+CUTOFF=1e-100
+DB="../DB/genomes/fungi"
+LIST=fungi_genome_list.txt
 marker_path=$1
 #echo $marker_path
 #read -p "check, check"
 
 if [ $# -ne 1 ]
 then
-echo "Path to markers required as argument to script\n"
-exit 1
+ echo "Path to markers required as argument to script\n"
+ exit 1
 fi
+
 #
-#cp marker files in to pwd -> forward could just append to that file by passing the path to
-#the python script as a second paramater
+# cp marker files in to pwd -> forward 
+# could just append to that file by passing the path to the python script 
+# as a second paramater
 while read line
 do
-cp $marker_path/$line/*.fasta ./$line.fasta
-cat $marker_path/$line/*.fasta > $line.fasta
+# cp $marker_path/$line/*.fasta ./$line.fasta
+ cat $marker_path/$line/*.fasta > $line.fasta
 done < marker_list.txt
 
 #for each of the 164 files
-db_loc="../databases/Fungal_genomes/"
-ls $db_loc > genome_list.txt
+#ls $DB > genome_list.txt
+
 #load required modules
 module load hmmer/3.0
 module load hmmer/2.3.2
 module load cdbfasta
 module load muscle
 
-while read genome
+for file in $DB
 do
 
 base_name=${genome%.*}
@@ -38,15 +43,16 @@ cp $db_loc$genome /tmp
 cdbfasta /tmp/$genome
 #hmm search that file to find the peptide with highest match
 # for each marker, using the markers.hmm
-`hmmsearch -E 1e-100 --domtblout $base_name.MARKERS.tbl ../marker_DB/markers_3.hmm /tmp/$genome > $base_name.hmmsearch.out`
+hmmsearch -E $CUTOFF --domtblout $base_name.MARKERS.tbl ../marker_DB/markers_3.hmm /tmp/$genome > $base_name.hmmsearch.out
+
 #get the peptide that matches each marker
 #make a python script to do this
 python hmm_marker_update.py $base_name.MARKERS.tbl
 #add (append) the new peptide to the new marker file
 #clean up the genome file (ie remove the copy that is script folder)
 rm $base_name.*
-#END FOR EACH GENOME FILE
-done < genome_list.txt
+done
+# < genome_list.txt
 
 #provides a double check that duplicate seqeunces are not added
 while read marker
@@ -68,16 +74,20 @@ mkdir ../marker_DB/hmm3
 #for each marker in the list
 while read marker
 do
-#create MSA with muscle
-muscle -in $marker.fasta -out $marker.msa
-#create new HMMs (v3 and v2)
-hmmbuild2 $marker.hmm $marker.msa
-mv *.hmm ../marker_DB/hmm2/
-hmmbuild --informat afa  $marker.hmm $marker.msa
-mv *.hmm ../marker_DB/hmm3/
-#move old HMMs to back up location with date
-#move new HMMs in to thier spot
+ #create MSA with muscle
+ muscle -in $marker.fasta -out $marker.msa
+
+ #create new HMMs (v3 and v2)
+ hmmbuild2 $marker.hmm $marker.msa
+
+ mv *.hmm ../marker_DB/hmm2/
+ hmmbuild --informat afa  $marker.hmm $marker.msa
+ mv *.hmm ../marker_DB/hmm3/
+
+ #move old HMMs to back up location with date
+ #move new HMMs in to thier spot
 done < marker_list.txt
+
 #read -p "check movement"
 mkdir ../marker_DB/marker_update_$DATE
 mv *.msa ../marker_DB/marker_update_$DATE
@@ -85,7 +95,7 @@ mv *.msa ../marker_DB/marker_update_$DATE
 #clean up workspace
 while read line
 do
-rm /tmp/$line*
+ rm /tmp/$line*
 done < genome_list.txt
 
 rm ../marker_DB/*.hmm
