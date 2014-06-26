@@ -154,7 +154,7 @@ cat $base_name.$marker.read_names.lst | cdbyank $file_name.cidx  > $base_name.$m
 
 done < $DBDIR/markers/$CLADE/list.txt
 
-perl $BASEDIR/combine_fasaln.pl -d . -ext msa.trim -if fasta -of fasta -o combine.all.fasaln
+perl $BASEDIR/combine_fasaln.pl -d . -ext msa.trim -if fasta -of fasta -o combine.all.fasaln --expected expected
 
 #clean usage directory
 #stamp=`date +%D|sed "s/\//_/g"`
