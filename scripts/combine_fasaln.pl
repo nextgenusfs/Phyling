@@ -11,12 +11,14 @@ my $ext = 'fasaln.trim';
 my $dir;
 my @expected;
 my $expected_file;
+my $debug ;
 GetOptions('d|dir:s'   => \$dir,
 	   'ext:s'     => \$ext,
 	   'if:s'       => \$iformat,
 	   'of:s'       => \$oformat,
 	   'expected:s' => \$expected_file,
 	   'o|out:s'   => \$outfile,
+	   'v|debug!' => \$debug,
 	   );
 
 die("need a dir") unless $dir && -d $dir;
@@ -36,6 +38,7 @@ for my $file (sort readdir(DIR) ) {
     next unless ($file =~ /(\S+)\.\Q$ext\E$/);
     my $in = Bio::AlignIO->new(-format => $iformat,
 			       -file   => "$dir/$file");
+    warn($file,"\n") if $debug;
     if( my $aln = $in->next_aln ) {
 	my %seen;
 	for my $seq ( $aln->each_seq ) {
@@ -43,7 +46,9 @@ for my $file (sort readdir(DIR) ) {
 	    if( $id =~ /(\S+)\|/) { 
 		$id = $1;
 	    }
-	    $matrix{$id} .= $seq->seq;
+		my $s = $seq->seq;
+		$s =~ s/\./-/g;
+	    $matrix{$id} .= $s;
 	    $seen{$id}++;
 	}
 	for my $exp ( @expected ) {
