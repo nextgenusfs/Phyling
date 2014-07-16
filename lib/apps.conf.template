@@ -1,0 +1,12 @@
+FASTQ_TO_FASTA=fastq_to_fasta
+HMMALIGN=hmmalign
+HMMSEARCH=hmmsearch
+TRANSEQ=transeq
+CDBFASTA=cdbfasta
+CDBYANK=cdbyank
+PHRAP=phrap
+GENEWISEDB=genewisedb
+SREFORMAT=sreformat
+TRIMAL=trimal
+FASTTREE=FastTreeMP
+MUSCLE=muscle
