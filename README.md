@@ -1,20 +1,20 @@
-Phyling
+PHYling
 =======
 Phylogentic analysis of unknown samples for the purpose of identification
 
 Required software:
 ==================
-*EMBOSS\n
-*FASTX toolkit\n
-*Muscle\n
-*FastTree\n
-*HMMER 3.0\n
-*HMMER 2.0\n
-*python\n
-*perl - BioPerl modules\n
-*cdbfasta\n
-*genewise/genewisedb\n
-*Phrap\n
+* EMBOSS
+* FASTX toolkit
+* Muscle
+* FastTree
+* HMMER 3.0
+* HMMER 2.0
+* python
+* perl - BioPerl modules
+* cdbfasta
+* genewise/genewisedb
+* Phrap
 
 PIPELINE FLOW:
 ==============
