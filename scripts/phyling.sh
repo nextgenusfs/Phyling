@@ -24,7 +24,7 @@ module load trimal
 
 file_path="$1"
 phred="$2"
-
+prefix="$3"
 
 if [ $# -eq 0 ]; then
  echo "Input file path required"
@@ -43,24 +43,24 @@ ext=${file_name##*.}
 if [ "$ext" == "fastq" ]; then
  #fastq file processing covert to fasta format
  if [ ! -f $base_name.fa ]; then
-  fastq_to_fasta -Q $phred -i $file_path  > $base_name.fasta
+  fastq_to_fasta -Q $phred -i $file_path > $base_name.fasta
  fi
  file_name=$base_name.fasta
 fi
+
+
+#get base ID for later on when searching for hmm matches
+id=`grep -o '>'[A-Z,a-z,0-9]* $file_name|sed "s/>//g"|sort -u`
+echo $id
 
 #This script does 3 things no names get replaced with unknown+#
 # adds UNK| to all Ids for building the consesnus tree
 # and removes :'s that cause issues for emboss
 if [ ! -f $base_name.fx.ok ]; then
- perl $BASEDIR/name_checker.pl $file_name > $base_name.fx
+ perl $BASEDIR/name_checker.pl -p $id $file_name > $base_name.fx
  mv $base_name.fx $file_name
  touch $base_name.fx.ok
 fi
-
-#get base ID for later on when searching for hmm matches
-id=`grep -o '>'[A-Z,a-z,0-9]* $file_name|sed "s/>//g"|sort -u`
-#echo $id
-
 #tranlate in 6 frames the sequnences in the files
 if [ ! -f $base_name.6frame.faa ]; then
  transeq -trim -clean -frame 6 $file_name $base_name.6frame.faa
@@ -110,7 +110,7 @@ cat $base_name.$marker.read_names.lst | cdbyank $file_name.cidx  > $base_name.$m
  #add top genewise peptide to local marker file
  while read line; do  
   if [ "$line" == "//" ]; then 
-   break; 
+   break;
   fi
   echo $line >> $base_name.$marker.1.pep
  done < $base_name.$marker.pep
