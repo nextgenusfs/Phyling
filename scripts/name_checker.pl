@@ -26,11 +26,12 @@ GetOptions("t|title:s"  => \$title,
 	   "p|prefix:s" => \$prefix);
 while(<>) {
     if( /^>/ ) {
-# $count keeps track of number of unique IDs for replacement
+          # $count keeps track of number of unique IDs for replacement
 	if( s/no name/$title\_$count/i ) { $count++ }
 	if( ! /\|/ ) {
 	    s/>/>$prefix|/;
 	}
+	s/:/_/g;
     }
     print;
 }
