@@ -1,4 +1,4 @@
-Phyling
+PHYling
 =======
 Phylogentic analysis of unknown samples for the purpose of identification
 
