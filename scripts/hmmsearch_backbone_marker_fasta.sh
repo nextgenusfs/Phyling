@@ -31,7 +31,7 @@ if [ ! $FILE ]; then
 fi
 
 BASE=`basename $FILE .fasta`
-echo "FILE is $FILE. Base is $BASE"
+#echo "FILE is $FILE. Base is $BASE"
 
 if [ ! -f "$OUT/$BASE.domtbl" ]; then
  hmmsearch --domtbl $OUT/$BASE.domtbl -E $CUTOFF --cpu $CPU $MARKERDIR/$MARKERS $GENOMEDIR/$FILE > $OUT/$BASE.hmmsearch
