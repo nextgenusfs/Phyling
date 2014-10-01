@@ -6,12 +6,12 @@ use Bio::DB::Fasta;
 use Bio::SeqIO;
 use Getopt::Long;
 my $cutoff = 1e-40;
-my $idir = shift || 'out';
-my $odir = shift || 'DB/markers/fungi/marker_files';
+my $idir = 'out';
+my $odir = 'DB/markers/fungi/marker_files';
 my $ext = 'domtbl';
 my $dbfile = 'DB/genomes/fungi';
 my $debug = 0;
-GetOptions('db:s' => \$dbfile,
+GetOptions('db:s'     => \$dbfile,
 	   'v|debug!' => \$debug,
 	   'o|out:s'  => \$odir,
 	   'i|in:s'   => \$idir,
