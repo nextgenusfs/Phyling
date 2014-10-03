@@ -12,11 +12,14 @@ use IO::String;
 use Bio::SeqIO;
 use Bio::AlignIO;
 
+my $buffer_end_start = 3; # what is the sloppy overhang allowed when bringing in more seqs
+
+my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --refine region --verbose 0 --ryo ">%ti (%tab - %tae) score=%s rank=%r\n%tas\n" --showcigar no --showvulgar no --showalignment no';
 my %uncompress = ('bz2' => 'bzcat',
 		  'gz'  => 'zcat');
 
-my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ
-CDBFASTA CDBYANK PHRAP GENEWISEDB SREFORMAT TRIMAL FASTTREE MUSCLE);
+my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ FASTA TFASTY HMMEMIT
+CDBFASTA CDBYANK PHRAP GENEWISEDB SREFORMAT TRIMAL FASTTREE MUSCLE EXONERATE);
 
 $ENV{WISECONFIGDIR} = '/opt/wise/2.4.0/wisecfg';
 my $app_conf;
@@ -28,8 +31,11 @@ if( $PHYLINGHOME) {
 
 my $debug = 0;
 my $qual_offset = 33;
-my $evalue_cutoff = '1e-10';
-
+my $hmmer_cutoff = '1e-10';
+my $contig_match_cutoff = '1e-8';
+my $contig_transsearch_cutoff = '1e-3';
+my $Max_rounds = 10; # max iterations
+my $scaffold_separator = 'N'x15; # 5 amino acid break in the scaffolded contigs, codon
 my $njtree_options = "-boot 1000 -wag -seed 121 -bionj";
 my ($hmm2_models,$hmm3_models,$marker_hmm,$marker_fasta_dir);
 my $clade = 'fungi';
@@ -41,11 +47,11 @@ my $prefix;
 my $seqprefix;
 my $rDNA_hmm;
 
-my $do_MSA = 1;
+my $do_MSA = 0;
 GetOptions('ac|app|appconf:s' => \$app_conf,
 	   'v|debug!'         => \$debug,
 	   'force!'           => \$force,
-
+	   'maxrounds:i'      => \$Max_rounds,
 	   'q|qual:i'         => \$qual_offset,
 	   't|temp|tmpdir:s'  => \$tmpdir,
 	   'cleanup!'         => \$cleanup,
@@ -127,6 +133,7 @@ if(  ! -d $tmpdir ) {
 
 my $fasta_file;
 
+my $data_type;
 if( $fname =~ /(\S+)\.(fastq|fq)/ ) {
     $prefix = $1 if ! defined $prefix;
     $fasta_file = File::Spec->catfile($tmpdir,"$1.fasta");
@@ -142,10 +149,11 @@ if( $fname =~ /(\S+)\.(fastq|fq)/ ) {
 	debug("CMD: $cmd\n");
 	`$cmd`;
     }
-
+    $data_type = 'FASTQ';
 } elsif( $fname =~ /(\S+)\.(seq|fasta|fa|fas)/ ) {
     $prefix = $1 if ! defined $prefix;
     $fasta_file = $in_file;
+    $data_type = 'FASTA';
 } else {
     warn("unknown extension in file $fname ($in_file)\n");
     exit;
@@ -163,6 +171,7 @@ $fasta_file = $tmp_rename;
 
 #INDEX THE READS FILE FOR LATER PROCESSING
 &index_file($fasta_file);
+
 
 # MAKE 6 FRAME TRANSLATION PROTEIN FILE
 my $aafile = File::Spec->catfile($tmpdir,$prefix.".6frame.faa");
@@ -184,6 +193,8 @@ my $reads_per_marker = &parse_hmmtable($marker_table);
 my @trim_files;
 for my $marker ( keys %$reads_per_marker ) {
     my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
+    my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
+    next if ( ! $force && -f $pepfile);
 
     my @reads = keys %{$reads_per_marker->{$marker}};
     my $reads_file = File::Spec->catfile($tmpdir,$prefix.".$marker.r1.fasta");
@@ -191,13 +202,43 @@ for my $marker ( keys %$reads_per_marker ) {
 	-M $reads_file > -M $marker_table) {
 	&retrieve_reads($fasta_file,\@reads,$reads_file);
     }
-    my $contigs = &assemble_reads_phrap($reads_file);
-    my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
+    my $contigsfile = &assemble_reads_phrap($reads_file);
+    my $contig_count = &seqcount($contigsfile);
+    debug("seqcount for $contigsfile is $contig_count\n");
+    my $change = 1;
+    my $rounds = 0;
+    while( $contig_count > 1 && 
+	   $change > 0 && $rounds < $Max_rounds) {
+	my $added = &search_and_add($fasta_file,$contigsfile,$reads_file);
+	debug("added $added reads to $reads_file\n");
+	last if $added == 0;
+
+	$contigsfile = &assemble_reads_phrap($reads_file);
+	my $newcount = &seqcount($contigsfile);
+	warn("contig count is $contig_count newcount is $newcount\n");
+	$change = ($contig_count - $newcount);
+	$contig_count = $newcount;
+	$rounds++;
+    }
+    my $marker_cons = File::Spec->catfile($tmpdir,"$marker.cons");    
+    if( ! -f $marker_cons ) {
+	&make_consensus_HMM(File::Spec->catfile($hmm3_models,$marker.".hmm"),
+			    $marker_cons);
+    }
+
+    my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
+    my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
+    # merge the contigs, in their new order, into one scaffold with some Ns between
+    my $scaff_seq = join($scaffold_separator, (map { $_->seq } @$updated_contigs));
+    my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
+				 -seq => $scaff_seq);
+    Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
+    
     my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
-    debug("contigs file: $contigs\n");
-    if( -f $contigs ) {
+    debug("Scaffold file: $scaffoldfile\n");
+    if( -f $scaffoldfile ) {
 	&genewise_contigs(File::Spec->catfile($hmm2_models,$marker.".hmm"),
-			  $contigs,$pepfile,$cdnafile);
+			  $scaffoldfile,$pepfile,$cdnafile);
     }
     my $pepseq;
     my $pepresult = File::Spec->catfile($tmpdir,$prefix.".$marker.1.pep");
@@ -227,48 +268,32 @@ for my $marker ( keys %$reads_per_marker ) {
 				  -file   => $pepresult)->next_seq;
     }	
 
-    my @cdnaseq;
-    if( $force || ! -f $cdnaresult || 
-	-M $cdnaresult > -M $cdnafile ) {
-	if( -f $cdnafile && ! -z $cdnafile ) {
-	    debug("cdnafile: $cdnafile\n");
-	    @cdnaseq = &extract_cdna_genewise_output($cdnafile);
-	    if( @cdnaseq ) {
-		for my $cdnaseq ( @cdnaseq ) {
-		    debug("got a cdnaseq of length ", $cdnaseq->length, "\n");
-		    $cdnaseq->display_id("$seqprefix.$marker.".$cdnaseq->display_id());
-		    debug($cdnaseq->seq,"\n");
-		}
-		Bio::SeqIO->new(-format => 'fasta',
-				-file   => ">$cdnaresult")->write_seq(@cdnaseq);				    
-	    }
-	} else {
-	    debug("cannot open cdnafile $cdnafile\n");
-	    next;
-	}
-    } else {
-	my $ioseq= Bio::SeqIO->new(-format => 'fasta',
-			       -file   => $cdnaresult);
-	while (my $t = $ioseq->next_seq ) {
-	    push @cdnaseq, $t;
-	}
-    }
-
-    if( $do_MSA ) {
-	my $marker_alnfile = File::Spec->catfile($tmpdir,
-						 $prefix.".$marker.msa");	    
-	&hmmalign(File::Spec->catfile($hmm2_models,$marker.".hmm"),
-		  [$pepseq,@$marker_seqs],$marker_alnfile);
-	my $marker_trimfile = &trim_aln($marker_alnfile);
-	if( $marker_trimfile ) {
-	    # build tree
-	    my $treefile = File::Spec->catfile($tmpdir,$prefix.".$marker.nj.tree");
-	    &build_NJtree($marker_trimfile,$treefile);
-	    push @trim_files, $marker_trimfile;
-	} else {
-	    debug("no pepfile for $contigs\n");
-	}
-    }
+    &exonerate_best_model($pepresult,$scaffoldfile,$cdnafile);
+#    if( $force || ! -f $cdnaresult || 
+#	-M $cdnaresult > -M $cdnafile ) {
+#	if( -f $cdnafile && ! -z $cdnafile ) {
+#	    debug("cdnafile: $cdnafile\n");
+#	    @cdnaseq = &extract_cdna_genewise_output($cdnafile);
+#	    if( @cdnaseq ) {
+#		for my $cdnaseq ( @cdnaseq ) {
+#		    debug("got a cdnaseq of length ", $cdnaseq->length, "\n");
+#		    $cdnaseq->display_id("$seqprefix.$marker.".$cdnaseq->display_id());
+#		    debug($cdnaseq->seq,"\n");
+#		}
+#		Bio::SeqIO->new(-format => 'fasta',
+#				-file   => ">$cdnaresult")->write_seq(@cdnaseq);				    
+#	    }
+#	} else {
+#	    debug("cannot open cdnafile $cdnafile\n");
+#	    next;
+#	}
+#   } else {
+#	my $ioseq= Bio::SeqIO->new(-format => 'fasta',
+#			       -file   => $cdnaresult);
+#	while (my $t = $ioseq->next_seq ) {
+#	    push @cdnaseq, $t;
+#	}
+#    }
     last if $debug;
 }
 
@@ -420,7 +445,6 @@ sub extract_cdna_genewise_output {
     
     @cdnas;
 }
-
 sub genewise_contigs {
     my ($hmm_model,$infile,$outfile,$outfilecdna) = @_;
     my ($rc1,$rc2) = (1,1);
@@ -433,18 +457,36 @@ sub genewise_contigs {
 	debug("CMD: $cmd\n");
 	$rc1 = `$cmd`;
     }
-    if( $force ||
-	! -f $outfilecdna ||
-	-M $outfilecdna > -M $infile ) {
-	my $cmd = sprintf("%s -hmmer -cdna -splice flat -init local -silent -quiet %s %s > %s",
-		       $paths->{GENEWISEDB},
-		       $hmm_model,$infile,$outfilecdna);
-	debug("CMD: $cmd\n");
-	$rc2 = `$cmd`;
-    }
-    $rc1 && $rc2;
+
+#    if( $force ||
+#	! -f $outfilecdna ||
+#	-M $outfilecdna > -M $infile ) {
+#	my $cmd = sprintf("%s -hmmer -cdna -splice flat -init local -silent -quiet %s %s > %s",
+#		       $paths->{GENEWISEDB},
+#		       $hmm_model,$infile,$outfilecdna);
+#	debug("CMD: $cmd\n");
+#	$rc2 = `$cmd`;
+#    }
+    $rc1; # && $rc2;
 }
 
+sub exonerate_best_model {
+    my ($inpepfile,$contigfile,$outfile) = @_;
+    my $rc = 0;
+    if( $force ||
+	! -f $outfile ||
+	-M $outfile > -M $inpepfile ) {
+
+	my $cmd = sprintf("%s %s %s %s > %s",
+			  $paths->{EXONERATE},
+			  $inpepfile,$contigfile,
+			  $exonerate_options,
+			  $outfile);
+	debug("CMD: $cmd\n");
+	$rc = `$cmd`;
+    }
+    $rc;
+}
 sub assemble_reads_phrap {
     my $infile = shift;
     my $contigs = $infile.".contigs";
@@ -460,8 +502,9 @@ sub assemble_reads_phrap {
 
 sub retrieve_reads {
     my ($infile,$reads_ar,$outfile) = @_;
-    # index_file($infile); # would be redundant to call this many times
-    # so should just assume it is indexed?
+    if( ! -f "$infile.cidx" ) {
+	&index_file($infile);
+    }
     my $cmd = sprintf("| %s %s.cidx > %s",
 		      $paths->{CDBYANK},$infile,$outfile);
     debug("CMD: $cmd\n");
@@ -472,6 +515,23 @@ sub retrieve_reads {
 	$i++;
     }
     $i;
+}
+
+sub get_read {
+    my ($infile,$read_name) = @_;
+    if( ! -f "$infile.cidx" ) {
+	&index_file($infile);
+    }
+    my $cmd = sprintf("%s %s.cidx -a %s |",
+		      $paths->{CDBYANK},$infile,$read_name);
+    debug("CMD: $cmd\n");
+    open(my $readseq => $cmd) || die "Cannot open $cmd: $!\n";
+    my $seqio = Bio::SeqIO->new(-format => 'fasta', -fh => $readseq);
+    my @seqs;
+    while(my $s = $seqio->next_seq ) {
+	push @seqs, $s;
+    }
+    @seqs;
 }
 
 sub read_marker_refproteins {
@@ -503,7 +563,7 @@ sub parse_hmmtable {
 	my $q = $row[3];
 	# this may be unnecessary
 	my $evalue = $row[6];
-	next if $evalue > $evalue_cutoff;
+	next if $evalue > $hmmer_cutoff;
 	my $id = $t;
 	$id =~ s/_[0-6]$//;
 	$seen->{$q}->{$id}++;
@@ -522,7 +582,7 @@ sub hmmsearch_markers {
 	-M $table > -M $seqdb ) {
 	my $cmd = sprintf("%s -E %s --cpu %d --domtblout %s %s %s > %s ",
 			  $paths->{HMMSEARCH}, 
-			  $evalue_cutoff,$cpus,
+			  $hmmer_cutoff,$cpus,
 			  $table,$markerdb,$seqdb,$rpt);
 	debug("CMD: $cmd\n");
 	$rc = `$cmd`;
@@ -626,9 +686,148 @@ sub parse_config {
     $apps;
 }
 
+sub seqcount {
+    my $file = shift;
+    open(my $fh => "grep -c '^>' $file |") || die $!;
+    my $n = <$fh>;
+    $n =~ s/\s+//g;
+    $n;
+}
+
+
+sub seq_lengths {
+    my $file = shift;
+    my $in = Bio::SeqIO->new(-format => 'fasta', -file => $file);
+    my $res = {};
+    while( my $s = $in->next_seq ) {
+	debug($s->display_id. " ". $s->length,"\n");
+	$res->{$s->display_id} = $s->length;
+    }
+    $res;
+}
+
+=head2 stitch_order_contigs
+
+ Title   : stitch_order_contigs
+ Usage   : &stitch_order_contigs($markerpep,$contigs);
+ Function: Reorder and scaffold contigs based on a protein query sequence from 
+ Returns : Update contigs file
+ Args    :
+
+
+=cut
+
+sub stitch_order_contigs {
+    my ($marker_cons,$contigfile) = @_;
+    my $cmd = sprintf("%s -m 8c -E %s %s %s",
+		      $paths->{TFASTY},
+		      $contig_transsearch_cutoff,
+		      $marker_cons,
+		      $contigfile);
+    debug("running $cmd\n");
+    open(my $run => "$cmd |") || die "cannot run: $cmd\n";
+    my @results;
+    while(<$run>) {
+	next if /^\#/;
+	chomp;
+	my ($q,$h,$pid,$match,$mismatch,$gap,$qstart,$qend,
+	    $tstart,$tend,$evalue,$bits) = split(/\t/,$_);
+	my ($tstrand) = (1,1);	
+	if( $tstart > $tend ) { 
+	    ($tend,$tstart) = ($tstart,$tend);
+	    $tstrand = -1;
+	}
+	debug("result is $qstart,$qend,$h,$tstart,$tend,$tstrand,$evalue,$bits,$pid \n");
+	push @results, [$qstart,$qend,$h,$tstart,$tend,$tstrand,$evalue,$bits,$pid];
+    }
+    my %contigs;
+    my $read_contigs = Bio::SeqIO->new(-format => 'fasta', -file => $contigfile);
+    while(my $s = $read_contigs->next_seq ) {
+	debug("seq id is ", $s->display_id,"\n");
+        $contigs{$s->display_id} = $s;
+    }
+    my $new_order;
+    # sort by query protein alignment order
+    my %seen;
+    for my $res ( sort { $a->[0] <=> $b->[0] } @results ) {
+	debug (join("\t", @$res),"\n");
+	next if $seen{$res->[2]}++;
+	if( $res->[5] < 0 ) {
+	    push @$new_order, $contigs{$res->[2]}->revcom;
+	} else {
+	    push @$new_order, $contigs{$res->[2]};
+	}
+    }
+
+    $new_order; #bizzare love triangle
+}
+
+sub search_and_add {
+    my ($searchdb,$queryfile,$outputreads) = @_;
+    
+    my $qlens = &seq_lengths($queryfile);
+    my $rlens = &seq_lengths($outputreads);
+
+    my $cmd = sprintf("%s -E %s -m 8c %s %s |",
+		      $paths->{FASTA},$contig_match_cutoff,
+		      $queryfile, $searchdb);
+    debug("CMD: $cmd\n");
+    open(my $fasta_res => $cmd) || die "cannot run $cmd\n";
+    my @results;
+    my @readnames;
+    while(<$fasta_res>) {
+	next if /^\#/;
+	chomp;
+	my ($q,$h,$pid,$match,$mismatch,$gap,$qstart,$qend,
+	    $tstart,$tend,$evalue) = split(/\t/,$_);
+	next if( exists $rlens->{$h});
+	my ($qstrand,$tstrand) = (1,1);
+	if( $qstart > $qend ) { 
+	    ($qend,$qstart) = ($qstart,$qend);
+	    $qstrand = -1;
+	}
+	if( $tstart > $tend ) { 
+	    ($tend,$tstart) = ($tstart,$tend);
+	    $tstrand = -1;
+	}
+	if($tstart > $buffer_end_start ) { # if target alignment start is not 1 or some 
+	                                   # number close to 1 (buffer_end_start)
+	    push @readnames, $h;
+	} elsif( abs($qlens->{$q}-$qend) >= $buffer_end_start ) {
+	    # -----|        Query
+	    # ------------| Hit
+	    debug("$q overhanging $qend vs length: ".$qlens->{$q}."\n");
+	    my ($read_seq) = &get_read($searchdb,$h);
+	    my $read_len = $read_seq->length;
+	    if( $read_len > $tend) { # if the end of read align (tend) after the end of this aln
+		push @readnames, $h;
+	    }
+	}
+    }
+    warn("readnames are @readnames\n");
+    if( @readnames ) {
+	&retrieve_reads($searchdb,\@readnames,"$outputreads.add");
+	my $in = Bio::SeqIO->new(-format => 'fasta',
+				 -file   => "$outputreads.add");
+	my $out = Bio::SeqIO->new(-format => 'fasta',
+				  -file   => ">>$outputreads");
+	while( my $s = $in->next_seq ) {
+	    $out->write_seq($s);
+	}
+    }
+    return scalar @readnames;
+}
+
+sub make_consensus_HMM {
+    my ($hmmfile,$outfile) = @_;
+    my $cmd = sprintf("%s -c %s > $outfile",
+		      $paths->{HMMEMIT},$hmmfile);
+    `$cmd`;
+}
+
 sub debug {
-    my $msg = shift;
-    warn($msg) if $debug;
+    my @msg = @_;
+    warn(join(" ",@msg)) if $debug;
 }
 
 
