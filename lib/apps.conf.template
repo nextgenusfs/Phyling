@@ -10,3 +10,7 @@ SREFORMAT=sreformat
 TRIMAL=trimal
 FASTTREE=FastTreeMP
 MUSCLE=muscle
+FASTA=fasta36
+TFASTY=tfasty36
+HMMEMIT=hmmemit
+EXONERATE=exonerate
