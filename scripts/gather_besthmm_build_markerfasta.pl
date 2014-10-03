@@ -9,16 +9,22 @@ my $cutoff = 1e-40;
 my $idir = 'out';
 my $odir = 'DB/markers/fungi/marker_files';
 my $ext = 'domtbl';
-my $dbfile = 'DB/genomes/fungi';
+my $dbfile; # = 'DB/genomes/fungi';
 my $debug = 0;
-GetOptions('db:s'     => \$dbfile,
+my $cdsdbfile; # optional for the extraction of CDS
+GetOptions('db|pep:s'    => \$dbfile,
+	   'cds:s'    => \$cdsdbfile,
 	   'v|debug!' => \$debug,
 	   'o|out:s'  => \$odir,
 	   'i|in:s'   => \$idir,
 	   'ext:s'    => \$ext,
     );
 my $db = Bio::DB::Fasta->new($dbfile);
-
+mkdir($odir) unless -d $odir;
+my $cdsdb;
+if( $cdsdbfile ) {
+    $cdsdb = Bio::DB::Fasta->new($cdsdbfile);
+}
 opendir(DIR, $idir) || die "cannot open $idir: $!";
 my %hits_by_query;
 for my $file ( readdir(DIR) ) {
@@ -31,14 +37,28 @@ for my $file ( readdir(DIR) ) {
 }
 for my $marker ( keys %hits_by_query ) {
     my $out = Bio::SeqIO->new(-format => 'fasta',
-			      -file   => ">$odir/$marker.fa");
+			      -file   => ">$odir/$marker.aa");
+    my $cdsout;
+    if( $cdsdb ) {
+	$cdsout = Bio::SeqIO->new(-format => 'fasta',
+				  -file   => ">$odir/$marker.cds");
+
+    }
     for my $sn ( values %{$hits_by_query{$marker}} ) {
 	my $s = $db->get_Seq_by_acc($sn);
-	if( ! $sn ) {
-	    warn("cannot find $sn ($marker) \n");
+	if( ! $s ) {
+	    warn("cannot find $sn ($marker) in AA db \n");
 	    next;
 	}
 	$out->write_seq($s);
+	if( $cdsdb ) {
+	    $s = $cdsdb->get_Seq_by_acc($sn);
+	    if( ! $s ) {
+		warn("cannot find $sn ($marker) in CDS db\n");
+		next;
+	    }
+	    $cdsout->write_seq($s);
+	}
     }
 }
 

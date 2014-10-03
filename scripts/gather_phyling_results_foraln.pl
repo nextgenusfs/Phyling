@@ -1,6 +1,7 @@
 #!env perl
 use strict;
-
+use warnings;
+use Bio::SeqIO;
 my $dir = shift || die $! ;
 opendir(DIR, $dir) || die $!;
 
@@ -9,20 +10,31 @@ for my $subdir (readdir(DIR) ) {
     next if ($subdir !~ /PHYling/);
     opendir(SUB,"$dir/$subdir") || die $!;
     for my $file (readdir(SUB) ) {
-	next unless $file =~ /(\S+)\.(\S+)\.1\.pep$/;
-	my ($strain,$gene) = ($1,$2);
-	push @{$d{$gene}}, [$strain, "$dir/$subdir/$file"];
+	if( $file =~ /(\S+)\.(\S+)\.1\.(pep|cdna)$/ ) {
+	    my ($strain,$gene,$type) = ($1,$2,$3);
+	    push @{$d{$gene}->{$type}}, [$strain, "$dir/$subdir/$file"];
+	}
     }
 }
 for my $g ( keys %d ) {
-    mkdir("$dir/marker_aln");
-    open(my $fh => ">$dir/marker_aln/$g.aa") || die $!;
-#    print $g,"\n";
-    for my $n ( @{$d{$g}} ) {
-#	print join("\t", '',@$n), "\n";
-	open(my $ifh => $n->[1]) || die $n->[1], " : $!";
-	while(<$ifh>) {
-	    print $fh $_;
+    mkdir("$dir/marker_aln");    
+    my %out = ( 'pep' => Bio::SeqIO->new(-format => 'fasta', 
+					 -file =>">$dir/marker_aln/$g.aa"),
+		'cdna' => Bio::SeqIO->new(-format => 'fasta', 
+					  -file =>">$dir/marker_aln/$g.cds"),
+	);
+    for my $type ( keys %{$d{$g}} ) {
+	for my $n ( @{ $d{$g}->{$type} } ) {
+	    my $seq = Bio::SeqIO->new(-format => 'fasta',
+				      -file   => $n->[1]);
+	    my $firstseq = $seq->next_seq;
+	    my $id = $firstseq->display_id;
+	    my @r = split(/\./,$id);
+	    if( @r  >= 4 ) { 
+		splice(@r,-3);
+		$firstseq->display_id(join(".",@r));
+	    }
+	    $out{$type}->write_seq($firstseq);	
 	}
     }
 }
