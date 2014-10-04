@@ -21,7 +21,7 @@ my %uncompress = ('bz2' => 'bzcat',
 
 my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ 
                        FASTA TFASTY HMMEMIT
-                       CDBFASTA CDBYANK PHRAP GENEWISEDB SREFORMAT 
+                       CDBFASTA CDBYANK PHRAP SREFORMAT 
                        TRIMAL FASTTREE MUSCLE EXONERATE);
 
 $ENV{WISECONFIGDIR} = '/opt/wise/2.4.0/wisecfg';
@@ -247,61 +247,11 @@ for my $marker ( keys %$reads_per_marker ) {
     }
 
     if( -f $scaffoldfile ) {
-#	&genewise_contigs(File::Spec->catfile($hmm2_models,$marker.".hmm"),
-#			  $scaffoldfile,$pepfile,$cdnafile);
 	&exonerate_best_model($marker_cons,$scaffoldfile,$cdnafile);
 	&translate_cdna($cdnafile,$pepfile);
+    } else {
+	warn("no scaffold to process for $marker\n");
     }
-
-#     my $pepresult = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
-#    if( $force || ! -f $pepresult || 
-#	-M $pepresult > -M $pepfile ) {
-#	if( -f $pepfile && ! -z $pepfile ) {
-#	    debug("pepfile: $pepfile\n");
-#	    $pepseq = &extract_peptide_genewise_output($pepfile);
-#	    if( $pepseq ) {
-#		warn("got a pepseq of length ", $pepseq->length, "\n");
-#		$pepseq->display_id($seqprefix);
-#		# let's remove stop codons
-#		my $pseq_str = $pepseq->seq;
-#		$pseq_str =~ s/\*//g;
-#		$pepseq->seq($pseq_str);
-#		Bio::SeqIO->new(-format => 'fasta',
-#				-file   => ">$pepresult")->write_seq($pepseq);
-#	    }
-#	} else {
-#	    warn("cannot open pepfile $pepfile\n");
-#	    next;
-#	}
-#   } else {
-#	$pepseq = Bio::SeqIO->new(-format => 'fasta',
-#				  -file   => $pepresult)->next_seq;
-#   }	
-#    if( $force || ! -f $cdnaresult || 
-#	-M $cdnaresult > -M $cdnafile ) {
-#	if( -f $cdnafile && ! -z $cdnafile ) {
-#	    debug("cdnafile: $cdnafile\n");
-#	    @cdnaseq = &extract_cdna_genewise_output($cdnafile);
-#	    if( @cdnaseq ) {
-#		for my $cdnaseq ( @cdnaseq ) {
-#		    debug("got a cdnaseq of length ", $cdnaseq->length, "\n");
-#		    $cdnaseq->display_id("$seqprefix.$marker.".$cdnaseq->display_id());
-#		    debug($cdnaseq->seq,"\n");
-#		}
-#		Bio::SeqIO->new(-format => 'fasta',
-#				-file   => ">$cdnaresult")->write_seq(@cdnaseq);				    
-#	    }
-#	} else {
-#	    debug("cannot open cdnafile $cdnafile\n");
-#	    next;
-#	}
-#   } else {
-#	my $ioseq= Bio::SeqIO->new(-format => 'fasta',
-#			       -file   => $cdnaresult);
-#	while (my $t = $ioseq->next_seq ) {
-#	    push @cdnaseq, $t;
-#	}
-#    }
     last if $debug;
 }
 
@@ -371,112 +321,19 @@ sub hmmalign {
     }
     
 }
-sub extract_peptide_genewise_output {
-    my ($infile) = shift;
-    open(my $fh => $infile) || die $!;
-    my $ready;
-    my $seq;
-    while(<$fh>) {
-	next if /^\#/ || /^\s+$/;
-	if( /^>Results/ ) {
-	    while(<$fh>) {
-		next if /^Making/;
-		last if /^\/\//;
-		$seq .= $_;
-	    }
-	}
-    }
-    my $pseq;
-    if( $seq && $seq =~ /^>/ ) {
-	my $iostring = IO::String->new($seq);
-	my $in = Bio::SeqIO->new(-format => 'fasta',
-				 -fh   => $iostring);
-	
-	while( my $s = $in->next_seq ) {
-	    $pseq = $s if ! $pseq || $pseq->length < $s->length;
-	}
-    } else {
-	debug("No seq for $infile\n");
-    }
-    $pseq;
-}
+
+=head2 exonerate_best_model
+
+ Title   : exonerate_best_model
+ Usage   :
+ Function: Finds best protein2genome alignment with exonerate
+ Example :
+ Returns : Status of run. Creates a CDS out file
+ Args    :
 
 
-sub extract_cdna_genewise_output {
-    my ($infile) = shift;
-    open(my $fh => $infile) || die $!;
-    my $ready;
-    my @seqs;
-    my @seqids;
-    while(<$fh>) {
-	next if /^\#/ || /^\s+$/;
-	if( /^>Results/ ) {
-	    if(/\(forward\)/ ) {
-		push @seqids, 'fwd';
-	    } elsif( /\(reverse\)/ ) {
-		push @seqids, 'rev';
-	    } else { 
-		warn("cannot parse $_\n");
-	    }
-	    push @seqs, '';
-	    my $seen_begin = 0;
-	    while(<$fh>) {
-		if( /^\/\// ) {
-		    last if $seen_begin;
-		    $seen_begin = 1- $seen_begin; # flip-flop
-		    next;
-		}
-		next unless $seen_begin;
-		$seqs[-1] .= $_;
-	    }
-	}
-    }
-    my @cdnas;
-    my $i = 0;
-    for my $seq ( @seqs ) { 
-	my $cdna;
-	if( $seq && $seq =~ /^>/ ) {
-	    my $iostring = IO::String->new($seq);
-	    my $in = Bio::SeqIO->new(-format => 'fasta',
-				     -fh   => $iostring);	    
-	    while( my $s = $in->next_seq ) {
-		$cdna .= $s->seq;
-	    }
-	    push @cdnas, Bio::Seq->new(-id => $seqids[$i].".".($i+1),
-				       -seq => $cdna);
-	    
-	} else {
-	    debug("No cDNA seq for $infile\n");
-	}
-	$i++;
-    }
-    
-    @cdnas;
-}
-sub genewise_contigs {
-    my ($hmm_model,$infile,$outfile,$outfilecdna) = @_;
-    my ($rc1,$rc2) = (1,1);
-    if( $force ||
-	! -f $outfile ||
-	-M $outfile > -M $infile ) {
-	my $cmd = sprintf("%s -hmmer -pep -splice flat -init local -silent -quiet %s %s > %s",
-			  $paths->{GENEWISEDB},
-			  $hmm_model,$infile,$outfile);
-	debug("CMD: $cmd\n");
-	$rc1 = `$cmd`;
-    }
+=cut
 
-#    if( $force ||
-#	! -f $outfilecdna ||
-#	-M $outfilecdna > -M $infile ) {
-#	my $cmd = sprintf("%s -hmmer -cdna -splice flat -init local -silent -quiet %s %s > %s",
-#		       $paths->{GENEWISEDB},
-#		       $hmm_model,$infile,$outfilecdna);
-#	debug("CMD: $cmd\n");
-#	$rc2 = `$cmd`;
-#    }
-    $rc1; # && $rc2;
-}
 
 sub exonerate_best_model {
     my ($inpepfile,$contigfile,$outfile) = @_;
