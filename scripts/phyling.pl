@@ -1,4 +1,4 @@
- #!env perl
+#!env perl
 use strict;
 use warnings;
 use FindBin qw($Bin);
@@ -18,8 +18,10 @@ my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --refine region --verbo
 my %uncompress = ('bz2' => 'bzcat',
 		  'gz'  => 'zcat');
 
-my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ FASTA TFASTY HMMEMIT
-CDBFASTA CDBYANK PHRAP GENEWISEDB SREFORMAT TRIMAL FASTTREE MUSCLE EXONERATE);
+my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ 
+                       FASTA TFASTY HMMEMIT
+                       CDBFASTA CDBYANK PHRAP GENEWISEDB SREFORMAT 
+                       TRIMAL FASTTREE MUSCLE EXONERATE);
 
 $ENV{WISECONFIGDIR} = '/opt/wise/2.4.0/wisecfg';
 my $app_conf;
@@ -204,6 +206,10 @@ for my $marker ( keys %$reads_per_marker ) {
     }
     my $contigsfile = &assemble_reads_phrap($reads_file);
     my $contig_count = &seqcount($contigsfile);
+    if( $contig_count == 0 ) {
+	warn("No assembled contigs or singlets available\n");
+	next;
+    }
     debug("seqcount for $contigsfile is $contig_count\n");
     my $change = 1;
     my $rounds = 0;
@@ -496,6 +502,7 @@ sub assemble_reads_phrap {
 	my $cmd = sprintf("%s %s",$paths->{PHRAP},$infile);
 	debug("CMD: $cmd\n");
 	`$cmd`;
+	`cat $infile.singlets >> $contigs`;
     }
     $contigs;
 }
