@@ -97,9 +97,9 @@ if( ! -f $rDNA_hmm ) {
 
 $marker_fasta_dir ||= File::Spec->catdir($Bin,'..','DB','markers',$clade,
 				    'marker_files');
-if( ! -d $marker_fasta_dir ) {
-    die("$marker_fasta_dir is not a valid directory with fasta sequences per model\n");
-}
+#if( ! -d $marker_fasta_dir ) {
+#    die("$marker_fasta_dir is not a valid directory with fasta sequences per model\n");
+#}
 
 my $error = 0;
 debug("app conf is $app_conf\n");
@@ -120,7 +120,7 @@ my $in_file = shift @ARGV;
 my (undef,$dir,$fname) = File::Spec->splitpath($in_file);
 
 my $base = $prefix;
-if( ! $prefix && $fname =~ /(\S+)\.(fast\w+|seq)/) {
+if( ! $prefix && $fname =~ /(\S+)\.(fq|fq|fast\w+|seq)/) {
     $base = $1;
 } else {
     $base = $$;
@@ -200,7 +200,7 @@ for my $marker ( keys %$reads_per_marker ) {
 			    $marker_cons);
     }
 
-    my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
+    #my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
     my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
     my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
     my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
@@ -238,7 +238,7 @@ for my $marker ( keys %$reads_per_marker ) {
 	
 	my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
 	# merge the contigs, in their new order, into one scaffold with some Ns between
-	my $scaff_seq = join($scaffold_separator, (map { $_->seq } @$updated_contigs));
+	my $scaff_seq = join($scaffold_separator, (map { defined $_  ? $_->seq : '' } @$updated_contigs));
 	my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
 				     -seq => $scaff_seq);
 	Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
@@ -639,6 +639,7 @@ sub stitch_order_contigs {
     for my $res ( sort { $a->[0] <=> $b->[0] } @results ) {
 	debug (join("\t", @$res),"\n");
 	next if $seen{$res->[2]}++;
+	next if ! defined $contigs{$res->[2]};
 	if( $res->[5] < 0 ) {
 	    push @$new_order, $contigs{$res->[2]}->revcom;
 	} else {
