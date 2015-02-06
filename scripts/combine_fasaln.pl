@@ -66,7 +66,7 @@ while( my ($id,$seq) = each %matrix ) {
 }
 $bigaln->set_displayname_flat(1);
 
-my $out = Bio::AlignIO->new(-format => $oformat,
+my $out = Bio::AlignIO->new(-format => $oformat, -idlength=>40,
 			    -file   => ">$outfile");
 $out->write_aln($bigaln);
 
