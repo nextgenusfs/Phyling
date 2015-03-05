@@ -14,3 +14,4 @@ FASTA=fasta36
 TFASTY=tfasty36
 HMMEMIT=hmmemit
 EXONERATE=exonerate
+CAP3=cap3
