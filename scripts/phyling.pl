@@ -14,13 +14,13 @@ use Bio::AlignIO;
 
 my $buffer_end_start = 3; # what is the sloppy overhang allowed when bringing in more seqs
 
-my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --refine region --verbose 0 --ryo ">%ti (%tab - %tae) score=%s rank=%r\n%tcs\n" --showcigar no --showvulgar no --showalignment no';
+my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --verbose 0 --ryo ">%ti (%tab - %tae) score=%s rank=%r\n%tcs\n" --showcigar no --showvulgar no --showalignment no --exhaustive';
 
 my %uncompress = ('bz2' => 'bzcat',
 		  'gz'  => 'zcat');
 
 my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ 
-                       FASTA TFASTY HMMEMIT
+                       FASTA TFASTY HMMEMIT CAP3
                        CDBFASTA CDBYANK PHRAP SREFORMAT 
                        TRIMAL FASTTREE MUSCLE EXONERATE);
 
@@ -50,6 +50,8 @@ my $prefix;
 my $seqprefix;
 my $rDNA_hmm;
 my $do_MSA = 0;
+my $consensus_folder = 'consensus';
+my $port = 8000 + int rand(2000);
 GetOptions('ac|app|appconf:s' => \$app_conf,
 	   'v|debug!'         => \$debug,
 	   'force!'           => \$force,
@@ -67,10 +69,14 @@ GetOptions('ac|app|appconf:s' => \$app_conf,
 	   'hmm3:s'           => \$hmm3_models,
 	   'md|markerdir:s'   => \$marker_fasta_dir,
 	   'rDNA!'            => \$rDNA_hmm,
+	   'cons|consensus:s' => \$consensus_folder,
 	   
 	   'msa!'             => \$do_MSA,
+	   'port:s'           => \$port,
 	   
     );
+
+mkdir($consensus_folder) unless -d $consensus_folder;
 
 $hmm3_models ||= File::Spec->catdir($Bin,'..','DB','markers',$clade,"HMM3");
 
@@ -109,7 +115,7 @@ if( ! $app_conf ) {
 my $paths = &parse_config($app_conf);
 for my $p ( @EXPECTED_APPS ) {
     if( ! exists $paths->{$p} || ! -x $paths->{$p} ) {
-	warn("cannot find Application $p ",$paths->{$p},"\n");
+	debug("cannot find Application $p ",$paths->{$p},"\n");
 	$error = 1;
     }
 }
@@ -157,10 +163,9 @@ if( $fname =~ /(\S+)\.(fastq|fq)/ ) {
     $fasta_file = $in_file;
     $data_type = 'FASTA';
 } else {
-    warn("unknown extension in file $fname ($in_file)\n");
+    debug("unknown extension in file $fname ($in_file)\n");
     exit;
 }
-
 $seqprefix ||= $prefix;
 
 # GET RID OF PROBLEMATIC CHARACTERS IN THE READ IDs
@@ -168,108 +173,150 @@ $seqprefix ||= $prefix;
 my $tmp_rename = File::Spec->catfile($tmpdir,$prefix.".fasta.fix");
 if( $force || ! -f $tmp_rename ) {
     &fix_read_ids($fasta_file,$tmp_rename);
+} else {
+    debug("Read file already renamed\n");
 }
 $fasta_file = $tmp_rename;
 
 #INDEX THE READS FILE FOR LATER PROCESSING
 &index_file($fasta_file);
 
+# make 
+my $bitfile = &make_2bit_file($fasta_file);
+
+my $blat_ready;
+unless( my $pid = fork() ) {
+    $blat_ready = &start_gfServer($port,$bitfile);
+} else {
+    sleep(60);
+    warn("here in parent prcess\n");
+    warn("Done with fork test\n");
 
 # MAKE 6 FRAME TRANSLATION PROTEIN FILE
-my $aafile = File::Spec->catfile($tmpdir,$prefix.".6frame.faa");
-if( -x $paths->{TRANSEQ} ) {
-    &make_6frame_transeq($fasta_file,$aafile);
-} else {
-    &make_6frame($fasta_file,$aafile);
-}
+    my $aafile = File::Spec->catfile($tmpdir,$prefix.".6frame.faa");
+    if( -x $paths->{TRANSEQ} ) {
+	&make_6frame_transeq($fasta_file,$aafile);
+    } else {
+	&make_6frame($fasta_file,$aafile);
+    }
 
 # RUN PROTEIN HMMSEARCH OF MARKERS AGAINST TRANSLATION
-my $match_pref = File::Spec->catfile($tmpdir,$prefix);
+    my $match_pref = File::Spec->catfile($tmpdir,$prefix);
 
-my ($marker_table,$marker_report) = &hmmsearch_markers($aafile,
-						       $marker_hmm,
-						       $match_pref);
+    my ($marker_table,$marker_report) = &hmmsearch_markers($aafile,
+							   $marker_hmm,
+							   $match_pref);
 
-my $reads_per_marker = &parse_hmmtable($marker_table);
+    my $reads_per_marker = &parse_hmmtable($marker_table);
 
-my @trim_files;
-for my $marker ( keys %$reads_per_marker ) {
-    my $marker_cons = File::Spec->catfile($tmpdir,"$marker.cons");    
-    if( ! -f $marker_cons ) {
-	&make_consensus_HMM(File::Spec->catfile($hmm3_models,$marker.".hmm"),
-			    $marker_cons);
+    my @trim_files;
+    for my $marker ( keys %$reads_per_marker ) {
+	my $marker_cons = File::Spec->catfile($consensus_folder,"$marker.cons");    
+	if( ! -f $marker_cons ) {
+	    &make_consensus_HMM(File::Spec->catfile($hmm3_models,$marker.".hmm"),
+				$marker_cons);
+	} else {
+	    debug("consensus HMM for $marker_cons already created\n");
+	}
+
+	#my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
+	my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
+	my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
+	my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
+	debug("cdnafile is $cdnafile\n");
+	if( -f $cdnafile ) {
+	    debug("cdnafile exists\n");
+	}
+	next if ( ! $force && -f $cdnafile);
+	if( ! -f $scaffoldfile || $force ) {
+	    my @reads = keys %{$reads_per_marker->{$marker}};
+	    my $reads_file = File::Spec->catfile($tmpdir,$prefix.".$marker.r1.fasta");
+	    if( $force || ! -f $reads_file || 
+		-M $reads_file > -M $marker_table) {
+		&retrieve_reads($fasta_file,\@reads,$reads_file);
+	    }
+
+#	my $contigsfile = &assemble_reads_phrap($reads_file);
+	    my $contigsfile = &assemble_reads_cap3($reads_file);
+	    my $contig_count = &seqcount($contigsfile);
+	    if( $contig_count == 0 ) {
+		warn("No assembled contigs or singlets available\n");
+		next;
+	    }
+	    debug("seqcount for $contigsfile is $contig_count\n");
+	    my $change = 1;
+	    my $rounds = 0;
+	    while( $contig_count > 1 && 
+		   $change > 0 && $rounds < $Max_rounds) {
+		my $added = &search_and_add($fasta_file,$contigsfile,$reads_file);
+		warn("added $added reads to $reads_file\n");
+		last if $added == 0;
+
+		#$contigsfile = &assemble_reads_phrap($reads_file);
+		$contigsfile = &assemble_reads_cap3($reads_file);
+		my $newcount = &seqcount($contigsfile);
+		warn("contig count was $contig_count newcount is $newcount\n");
+		$change = ($contig_count - $newcount);
+		$contig_count = $newcount;
+		$rounds++;
+	    }
+	    warn("performed $rounds of additional read gathering\n");
+
+	    my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
+	    # merge the contigs, in their new order, into one scaffold with some Ns between
+	    my $scaff_seq = join($scaffold_separator, (map { defined $_  ? $_->seq : '' } @$updated_contigs));
+	    my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
+					 -seq => $scaff_seq);
+	    Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
+
+	    debug("Scaffold file: $scaffoldfile\n");
+	}
+
+	if( -f $scaffoldfile ) {
+	    &exonerate_best_model($marker_cons,$scaffoldfile,$cdnafile);
+	    &translate_cdna($cdnafile,$pepfile);
+	} else {
+	    warn("no scaffold to process for $marker\n");
+	}
+	last if $debug;
     }
 
-    #my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
-    my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
-    my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
-    my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
+    if( $rDNA_hmm ) {
 
-    next if ( ! $force && -f $cdnafile);
-    if( ! -f $scaffoldfile || $force ) {
-	my @reads = keys %{$reads_per_marker->{$marker}};
-	my $reads_file = File::Spec->catfile($tmpdir,$prefix.".$marker.r1.fasta");
-	if( $force || ! -f $reads_file || 
-	    -M $reads_file > -M $marker_table) {
-	    &retrieve_reads($fasta_file,\@reads,$reads_file);
-	}
-	my $contigsfile = &assemble_reads_phrap($reads_file);
-	my $contig_count = &seqcount($contigsfile);
-	if( $contig_count == 0 ) {
-	    warn("No assembled contigs or singlets available\n");
-	    next;
-	}
-	debug("seqcount for $contigsfile is $contig_count\n");
-	my $change = 1;
-	my $rounds = 0;
-	while( $contig_count > 1 && 
-	       $change > 0 && $rounds < $Max_rounds) {
-	    my $added = &search_and_add($fasta_file,$contigsfile,$reads_file);
-	    debug("added $added reads to $reads_file\n");
-	    last if $added == 0;
-	    
-	    $contigsfile = &assemble_reads_phrap($reads_file);
-	    my $newcount = &seqcount($contigsfile);
-	    warn("contig count is $contig_count newcount is $newcount\n");
-	    $change = ($contig_count - $newcount);
-	    $contig_count = $newcount;
-	    $rounds++;
-	}
-	
-	my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
-	# merge the contigs, in their new order, into one scaffold with some Ns between
-	my $scaff_seq = join($scaffold_separator, (map { defined $_  ? $_->seq : '' } @$updated_contigs));
-	my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
-				     -seq => $scaff_seq);
-	Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
-	
-	debug("Scaffold file: $scaffoldfile\n");
     }
-
-    if( -f $scaffoldfile ) {
-	&exonerate_best_model($marker_cons,$scaffoldfile,$cdnafile);
-	&translate_cdna($cdnafile,$pepfile);
-    } else {
-	warn("no scaffold to process for $marker\n");
-    }
-    last if $debug;
 }
 
-if( $rDNA_hmm ) {
-    
+END {
+ &stop_gfServer($port);
+
 }
 
-sub build_NJtree {
-    my ($infile,$outfile) = @_;
+sub start_gfServer {
+    my ($Port,$bitfile) = @_;
+    warn("Port is $Port bitfile is $bitfile\n");
+    my $cmd = sprintf("%s start localhost %d %s -canStop",
+		      $paths->{GFSERVER},$Port,$bitfile);
+    debug("CMD: $cmd\n");
+    `$cmd`;
+    return 1;
+}
+sub stop_gfServer {
+    my ($Port) = @_;
+    system($paths->{GFSERVER},'stop','localhost',$Port);    
+}
+
+sub make_2bit_file {
+    my ($fasta) = shift;
+    my ($base) = $fasta;
+    $base .= ".2bit";
     if( $force ||
-	! -f $outfile ||
-	-M $outfile > -M $infile ) {
-	my $cmd = sprintf("%s %s %s -out %s",
-			  $paths->{FASTTREE},$njtree_options, $infile,$outfile);
+	! -f $base ||
+	-M $base > -M $fasta ) {
+	my $cmd = sprintf("%s %s %s",$paths->{FATOTWOBIT},$fasta,$base);
 	debug("CMD: $cmd\n");
 	`$cmd`;
-    }  
-    last if $debug;
+    }
+    $base;
 }
 
 sub trim_aln {
@@ -301,7 +348,7 @@ sub trim_aln {
 sub hmmalign {
     my ($hmm_model, $inseqs, $outfile) = @_;
     my $rc = 1;
-    warn("outfile is $outfile\n");
+    debug("outfile is $outfile\n");
     if( $force || ! -f $outfile ) {
 	my ($ifh,$infile) = tempfile('tmpXXXX',UNLINK=>1);
 	my $out = Bio::SeqIO->new(-format => 'fasta', -fh => $ifh);
@@ -362,6 +409,36 @@ sub assemble_reads_phrap {
 	debug("CMD: $cmd\n");
 	`$cmd`;
 	`cat $infile.singlets >> $contigs`;
+    }
+    if( ! -f "$contigs.renum" ||
+	-M $contigs < -M "$contigs.renum" ) {	
+
+	my $renumber = Bio::SeqIO->new(-format => 'fasta',
+				       -file   => $contigs);
+
+	my $out = Bio::SeqIO->new(-format => 'fasta',
+				  -file   => ">$contigs.renum");
+	my $i = 1;
+	while( my $s = $renumber->next_seq ) {
+	    $s->display_id(sprintf("ctg%d",$i++));
+	    $out->write_seq($s);
+	}
+	$out->close();
+	$out = undef;
+    }
+    "$contigs.renum";
+}
+
+sub assemble_reads_cap3 {
+    my $infile = shift;
+    my $contigs = $infile.".cap.contigs";
+    if( $force ||
+        ! -f $contigs ||
+        -M $infile < -M $contigs ) {
+        my $cmd = sprintf("%s %s",$paths->{CAP3},$infile);
+        debug("CMD: $cmd\n");
+        `$cmd`;
+        #`cat $infile.singlets >> $contigs`;
     }
     $contigs;
 }
@@ -503,6 +580,8 @@ sub make_6frame {
 	    }
 	    $rc++;
 	}
+    } else {
+	debug("6frame translation already created");
     }
     $rc;
 }
@@ -517,6 +596,8 @@ sub make_6frame_transeq {
 			  $paths->{TRANSEQ},$infile, $outfile);
 	debug("CMD: $cmd\n");
 	$rc=`$cmd`;
+    } else {
+	debug("6frame translation EMBOSS already run\n");
     }
     $rc;
 }
@@ -530,6 +611,8 @@ sub index_file {
 	my $cmd = sprintf("%s %s",$paths->{CDBFASTA},$infile);
 	debug("CMD: $cmd\n");
 	$rc = `$cmd`;
+    } else {
+	debug("index file already created\n");
     }
     $rc;
 }
@@ -655,16 +738,22 @@ sub search_and_add {
     
     my $qlens = &seq_lengths($queryfile);
     my $rlens = &seq_lengths($outputreads);
-
-    my $cmd = sprintf("%s -T %d -E %s -m 8c %s %s |",
-		      $paths->{FASTA},$CPUs,$contig_match_cutoff,
-		      $queryfile, $searchdb);
+    my (undef,$searchdir,$fname) = File::Spec->splitpath($searchdb);
+    $searchdir = '.';
+# replace this with BLAT and near-identity?
+#    my $cmd = sprintf("%s -T %d -E %s -m 8c %s %s |",
+#		      $paths->{FASTA},$CPUs,$contig_match_cutoff,
+#		      $queryfile, $searchdb);
+    my $cmd = sprintf("%s %s %s %s %s stdout -out=blast8 |",
+		      $paths->{GFCLIENT},'localhost',$port,$searchdir,$queryfile);
+    
     debug("CMD: $cmd\n");
     open(my $fasta_res => $cmd) || die "cannot run $cmd\n";
     my @results;
     my @readnames;
     while(<$fasta_res>) {
 	next if /^\#/;
+	debug($_);
 	chomp;
 	my ($q,$h,$pid,$match,$mismatch,$gap,$qstart,$qend,
 	    $tstart,$tend,$evalue) = split(/\t/,$_);
@@ -692,7 +781,7 @@ sub search_and_add {
 	    }
 	}
     }
-    warn("readnames are @readnames\n");
+    debug("readnames are @readnames\n");
     if( @readnames ) {
 	&retrieve_reads($searchdb,\@readnames,"$outputreads.add");
 	my $in = Bio::SeqIO->new(-format => 'fasta',

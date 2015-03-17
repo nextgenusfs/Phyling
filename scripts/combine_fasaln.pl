@@ -12,6 +12,7 @@ my $dir;
 my @expected;
 my $expected_file;
 my $debug ;
+my $skip;
 GetOptions('d|dir:s'   => \$dir,
 	   'ext:s'     => \$ext,
 	   'if:s'       => \$iformat,
@@ -19,10 +20,18 @@ GetOptions('d|dir:s'   => \$dir,
 	   'expected:s' => \$expected_file,
 	   'o|out:s'   => \$outfile,
 	   'v|debug!' => \$debug,
+           's|skip:s' => \$skip,
 	   );
 
 die("need a dir") unless $dir && -d $dir;
-
+my %skip_aln;
+if( $skip ) {
+ open(my $fh => $skip ) || die $!;
+ while(<$fh>) { 
+   my ($id) = split;
+   $skip_aln{$id}++;
+  }
+}
 opendir(DIR, $dir) || die"$dir: $!";
 
 if( $expected_file && open(my $fh => $expected_file) ) {
@@ -36,6 +45,11 @@ my (%matrix);
 for my $file (sort readdir(DIR) ) {
     next if $file eq $outfile;
     next unless ($file =~ /(\S+)\.\Q$ext\E$/);
+    my $stem = $1;
+    if( $skip_aln{$stem} ) {
+	warn("skipping $stem\n");
+	next;
+    }
     my $in = Bio::AlignIO->new(-format => $iformat,
 			       -file   => "$dir/$file");
     warn($file,"\n") if $debug;
@@ -60,8 +74,10 @@ for my $file (sort readdir(DIR) ) {
 }
 
 my $bigaln = Bio::SimpleAlign->new;
+
 while( my ($id,$seq) = each %matrix ) {
-    $bigaln->add_seq(Bio::LocatableSeq->new(-id  => $id,
+ warn("$id and ",length($seq),"\n");
+    $bigaln->add_seq(Bio::LocatableSeq->new(-id  => $id, #-end => length($seq),
 					    -seq => $seq));
 }
 $bigaln->set_displayname_flat(1);
