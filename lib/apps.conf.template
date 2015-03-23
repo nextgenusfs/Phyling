@@ -15,3 +15,7 @@ TFASTY=tfasty36
 HMMEMIT=hmmemit
 EXONERATE=exonerate
 CAP3=cap3
+BLAT=blat
+GFSERVER=gfServer
+FATOTWOBIT=faToTwoBit
+GFCLIENT=gfClient
