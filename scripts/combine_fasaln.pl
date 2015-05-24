@@ -26,7 +26,7 @@ GetOptions('d|dir:s'   => \$dir,
 die("need a dir") unless $dir && -d $dir;
 my %skip_aln;
 if( $skip ) {
- open(my $fh => $skip ) || die $!;
+ open(my $fh => $skip ) || die "$skip: $!";
  while(<$fh>) { 
    my ($id) = split;
    $skip_aln{$id}++;
@@ -37,6 +37,7 @@ opendir(DIR, $dir) || die"$dir: $!";
 if( $expected_file && open(my $fh => $expected_file) ) {
     while(<$fh>) {
 	chomp;
+	s/^>//;
 	push @expected, $_;
     }
 }
@@ -76,7 +77,7 @@ for my $file (sort readdir(DIR) ) {
 my $bigaln = Bio::SimpleAlign->new;
 
 while( my ($id,$seq) = each %matrix ) {
- warn("$id and ",length($seq),"\n");
+    warn("seqid is $id and ",length($seq)," \n") if $debug;
     $bigaln->add_seq(Bio::LocatableSeq->new(-id  => $id, #-end => length($seq),
 					    -seq => $seq));
 }
