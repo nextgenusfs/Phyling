@@ -41,7 +41,7 @@ my $Max_rounds = 10; # max iterations
 my $scaffold_separator = 'N'x15; # 5 amino acid break in the scaffolded contigs, codon
 my $njtree_options = "-boot 1000 -wag -seed 121 -bionj";
 my ($hmm2_models,$hmm3_models,$marker_hmm,$marker_fasta_dir);
-my $clade = 'fungi';
+my $clade = 'AFTOL70';
 my $CPUs = 1;
 my $cleanup = 0;
 my $force = 0; # force re-processing files even if there is cached intermediate
