@@ -1,13 +1,17 @@
-module load EMBOSS
-module load hmmer/3.0
+module load emboss
+module load hmmer/3
 module load cdbfasta
 module load fastx_toolkit
-module load wise
-module load FastTree
+module load genewise
+module load fasttree
 module load muscle
 module load trimal
-module load phrap
-
+module load phred-phrap-consed
+module load blat
+module load kent
+module load fasta
+module load cap3
+module load exonerate
 TEMPLATE=lib/apps.conf.template
 CONF=lib/apps.conf
 rm -f $CONF
