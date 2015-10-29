@@ -52,7 +52,7 @@ my $seqprefix;
 my $rDNA_hmm;
 my $do_MSA = 0;
 my $consensus_folder = 'consensus';
-my $port = 8000 + int rand(2000);
+my $port = 8001+int rand(100);
 GetOptions('ac|app|appconf:s' => \$app_conf,
 	   'v|debug!'         => \$debug,
 	   'force!'           => \$force,
@@ -629,7 +629,7 @@ sub fix_read_ids {
     while(<$fh>) {
 	if( /^>(\S+)/ ) {
 	    my $id = $1;
-	    $id =~ s/[-:\/]/_/g;
+	    $id =~ s/[-:\/#|]/_/g;
 	    $_ = ">$id\n";
 	    $rc++;
 	} 
