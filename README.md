@@ -27,26 +27,29 @@ will return a text document of the nearest neighbor for the unknown.
 
 Usage:
 ======
-For the phyling pipeline\n
+For the phyling pipeline
 ```
-./phyling -> give the usage message\n
-./phyling <input.fasta>\n
-./phyling <input.fastq> <phred>\n
+./phyling     # give the usage message
+./phyling <input.fasta>
+./phyling <input.fastq> <phred>
 ```
-For the marker update pipeline\n
-``
-./marker_update.sh <path to marker files>\n
-``
+For the marker update pipeline
+```
+./marker_update.sh <path to marker files>
+```
 
 Folder Dependencies
 ==================
-Each of these scripts (in the current state) expect the following file structure:\n
-Main folder\n
-1. marker_DB/
-	1. hmm2/
-	2. hmm3/
-2.results/
-3.databases/Fungal_genomes/
+Each of these scripts (in the current state) expect the following file structure:
+```
+Main folder
+    marker_DB/
+        hmm2/
+        hmm3/
+    results/
+    databases/
+        Fungal_genomes/
+```
 
-This can all be changed with a find and replace to suit your system. Alternatively symoblic links
+This can all be changed with a find and replace to suit your system. Alternatively symbolic links
 to the appropriate files could also be created in the main folder to allow the same functionality.
