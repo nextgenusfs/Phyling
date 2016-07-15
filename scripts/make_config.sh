@@ -8,10 +8,10 @@ module load muscle
 module load trimal
 module load phred-phrap-consed
 module load blat
+module load kent
 module load fasta
 module load cap3
-module load exonerate/2.4.0
-
+module load exonerate
 TEMPLATE=lib/apps.conf.template
 CONF=lib/apps.conf
 rm -f $CONF

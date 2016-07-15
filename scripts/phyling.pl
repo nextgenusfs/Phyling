@@ -11,6 +11,7 @@ use File::Temp qw(tempfile);
 use IO::String;
 use Bio::SeqIO;
 use Bio::AlignIO;
+my $SLEEP_TIME = 240; # sleep 240sec which should give the blatserver enough time to start up
 
 my $buffer_end_start = 3; # what is the sloppy overhang allowed when bringing in more seqs
 
@@ -183,108 +184,102 @@ $fasta_file = $tmp_rename;
 
 # make 
 my $bitfile = &make_2bit_file($fasta_file);
-
-my $blat_ready;
-unless( my $pid = fork() ) {
-    $blat_ready = &start_gfServer($port,$bitfile);
-} else {
-    sleep(60);
-    warn("here in parent prcess\n");
-    warn("Done with fork test\n");
+my $blat_ready = &start_gfServer($port,$bitfile);
 
 # MAKE 6 FRAME TRANSLATION PROTEIN FILE
-    my $aafile = File::Spec->catfile($tmpdir,$prefix.".6frame.faa");
-    if( -x $paths->{TRANSEQ} ) {
-	&make_6frame_transeq($fasta_file,$aafile);
-    } else {
-	&make_6frame($fasta_file,$aafile);
-    }
+my $aafile = File::Spec->catfile($tmpdir,$prefix.".6frame.faa");
+if( -x $paths->{TRANSEQ} ) {
+    &make_6frame_transeq($fasta_file,$aafile);
+} else {
+    &make_6frame($fasta_file,$aafile);
+}
 
 # RUN PROTEIN HMMSEARCH OF MARKERS AGAINST TRANSLATION
-    my $match_pref = File::Spec->catfile($tmpdir,$prefix);
+my $match_pref = File::Spec->catfile($tmpdir,$prefix);
 
-    my ($marker_table,$marker_report) = &hmmsearch_markers($aafile,
-							   $marker_hmm,
-							   $match_pref);
+my ($marker_table,$marker_report) = &hmmsearch_markers($aafile,
+						       $marker_hmm,
+						       $match_pref);
 
-    my $reads_per_marker = &parse_hmmtable($marker_table);
+my $reads_per_marker = &parse_hmmtable($marker_table);
 
-    my @trim_files;
-    for my $marker ( keys %$reads_per_marker ) {
-	my $marker_cons = File::Spec->catfile($consensus_folder,"$marker.cons");    
-	if( ! -f $marker_cons ) {
-	    &make_consensus_HMM(File::Spec->catfile($hmm3_models,$marker.".hmm"),
-				$marker_cons);
-	} else {
-	    debug("consensus HMM for $marker_cons already created\n");
+my @trim_files;
+for my $marker ( keys %$reads_per_marker ) {
+    my $marker_cons = File::Spec->catfile($consensus_folder,"$marker.cons");    
+    if( ! -f $marker_cons ) {
+	&make_consensus_HMM(File::Spec->catfile($hmm3_models,$marker.".hmm"),
+			    $marker_cons);
+    } else {
+	debug("consensus HMM for $marker_cons already created\n");
+    }
+    
+    #my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
+    my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
+    my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
+    my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
+    debug("cdnafile is $cdnafile\n");
+    if( -f $cdnafile ) {
+	debug("cdnafile exists\n");
+    }
+    next if ( ! $force && -f $cdnafile);
+    if( ! -f $scaffoldfile || $force ) {
+	my @reads = keys %{$reads_per_marker->{$marker}};
+	my $reads_file = File::Spec->catfile($tmpdir,$prefix.".$marker.r1.fasta");
+	if( $force || ! -f $reads_file || 
+	    -M $reads_file > -M $marker_table) {
+	    &retrieve_reads($fasta_file,\@reads,$reads_file);
 	}
-
-	#my $marker_seqs = &read_marker_refproteins($marker_fasta_dir,$marker);
-	my $cdnafile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.cdna");
-	my $pepfile = File::Spec->catfile($tmpdir,$prefix.".$marker.candidate.pep");
-	my $scaffoldfile = File::Spec->catfile($tmpdir,$prefix.".$marker.ord_scaf.fa");
-	debug("cdnafile is $cdnafile\n");
-	if( -f $cdnafile ) {
-	    debug("cdnafile exists\n");
-	}
-	next if ( ! $force && -f $cdnafile);
-	if( ! -f $scaffoldfile || $force ) {
-	    my @reads = keys %{$reads_per_marker->{$marker}};
-	    my $reads_file = File::Spec->catfile($tmpdir,$prefix.".$marker.r1.fasta");
-	    if( $force || ! -f $reads_file || 
-		-M $reads_file > -M $marker_table) {
-		&retrieve_reads($fasta_file,\@reads,$reads_file);
-	    }
-
+	
 #	my $contigsfile = &assemble_reads_phrap($reads_file);
-	    my $contigsfile = &assemble_reads_cap3($reads_file);
-	    my $contig_count = &seqcount($contigsfile);
-	    if( $contig_count == 0 ) {
-		warn("No assembled contigs or singlets available\n");
-		next;
-	    }
-	    debug("seqcount for $contigsfile is $contig_count\n");
-	    my $change = 1;
-	    my $rounds = 0;
-	    while( $contig_count > 1 && 
-		   $change > 0 && $rounds < $Max_rounds) {
-		my $added = &search_and_add($fasta_file,$contigsfile,$reads_file);
-		warn("added $added reads to $reads_file\n");
-		last if $added == 0;
-
-		#$contigsfile = &assemble_reads_phrap($reads_file);
-		$contigsfile = &assemble_reads_cap3($reads_file);
-		my $newcount = &seqcount($contigsfile);
-		warn("contig count was $contig_count newcount is $newcount\n");
-		$change = ($contig_count - $newcount);
-		$contig_count = $newcount;
-		$rounds++;
-	    }
-	    warn("performed $rounds of additional read gathering\n");
-
-	    my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
-	    # merge the contigs, in their new order, into one scaffold with some Ns between
-	    my $scaff_seq = join($scaffold_separator, (map { defined $_  ? $_->seq : '' } @$updated_contigs));
-	    my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
-					 -seq => $scaff_seq);
-	    Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
-
-	    debug("Scaffold file: $scaffoldfile\n");
+	my $contigsfile = &assemble_reads_cap3($reads_file);
+	my $contig_count = &seqcount($contigsfile);
+	if( $contig_count == 0 ) {
+	    warn("No assembled contigs or singlets available\n");
+	    next;
 	}
-
-	if( -f $scaffoldfile ) {
-	    &exonerate_best_model($marker_cons,$scaffoldfile,$cdnafile);
-	    &translate_cdna($cdnafile,$pepfile);
-	} else {
-	    warn("no scaffold to process for $marker\n");
+	debug("seqcount for $contigsfile is $contig_count\n");
+	my $change = 1;
+	my $rounds = 0;
+	while( $contig_count > 1 && 
+	       $change > 0 && $rounds < $Max_rounds) {
+	    my $added = &search_and_add($fasta_file,$contigsfile,$reads_file);
+	    warn("added $added reads to $reads_file\n");
+	    last if $added == 0;
+	    
+	    #$contigsfile = &assemble_reads_phrap($reads_file);
+	    $contigsfile = &assemble_reads_cap3($reads_file);
+	    my $newcount = &seqcount($contigsfile);
+	    warn("contig count was $contig_count newcount is $newcount\n");
+	    $change = ($contig_count - $newcount);
+	    $contig_count = $newcount;
+	    $rounds++;
 	}
-	last if $debug;
+	warn("performed $rounds of additional read gathering\n");
+	
+	my $updated_contigs = &stitch_order_contigs($marker_cons,$contigsfile);
+	# merge the contigs, in their new order, into one scaffold with some Ns between
+	my $scaff_seq = join($scaffold_separator, (map { defined $_  ? $_->seq : '' } @$updated_contigs));
+	my $scaffold = Bio::Seq->new(-id => "$prefix.$marker.scaffold",
+				     -seq => $scaff_seq);
+	Bio::SeqIO->new(-format => 'fasta', -file =>">$scaffoldfile")->write_seq($scaffold);
+	
+	debug("Scaffold file: $scaffoldfile\n");
     }
-
-    if( $rDNA_hmm ) {
-
+    
+    if( -f $scaffoldfile ) {
+	&exonerate_best_model($marker_cons,$scaffoldfile,$cdnafile);
+	&translate_cdna($cdnafile,$pepfile);
+    } else {
+	warn("no scaffold to process for $marker\n");
     }
+    last if $debug;
 }
+
+if( $rDNA_hmm ) {
+    
+}
+
+&stop_gfServer($port);
 
 END {
  &stop_gfServer($port);
@@ -293,15 +288,22 @@ END {
 
 sub start_gfServer {
     my ($Port,$bitfile) = @_;
-    warn("Port is $Port bitfile is $bitfile\n");
-    my $cmd = sprintf("%s start localhost %d %s -canStop",
-		      $paths->{GFSERVER},$Port,$bitfile);
-    debug("CMD: $cmd\n");
-    `$cmd`;
+    #my $pid = fork();
+    #die "fork failed" unless defined $pid;
+    #if ($pid == 0) {
+	# child process goes here
+	warn("Port is $Port bitfile is $bitfile\n");
+	my $cmd = sprintf("%s start localhost %d %s -canStop",
+			  $paths->{GFSERVER},$Port,$bitfile,$bitfile);
+	debug("CMD: $cmd\n");
+	system("$cmd &");
+	warn("done executing\n");
+   # }
     return 1;
 }
 sub stop_gfServer {
     my ($Port) = @_;
+	warn("calling stop on $Port");
     system($paths->{GFSERVER},'stop','localhost',$Port);    
 }
 
@@ -527,8 +529,10 @@ sub hmmsearch_markers {
 			  $paths->{HMMSEARCH}, 
 			  $hmmer_cutoff,$CPUs,
 			  $table,$markerdb,$seqdb,$rpt);
-	debug("CMD: $cmd\n");
+	warn("CMD: $cmd\n");
 	$rc = `$cmd`;
+    } else {
+      sleep($SLEEP_TIME);
     }
     ($table,$rpt);
 }
