@@ -15,7 +15,7 @@ my $SLEEP_TIME = 240; # sleep 240sec which should give the blatserver enough tim
 
 my $buffer_end_start = 3; # what is the sloppy overhang allowed when bringing in more seqs
 
-my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --verbose 0 --ryo ">%ti (%tab - %tae) score=%s rank=%r\n%tcs\n" --showcigar no --showvulgar no --showalignment no --exhaustive';
+my $exonerate_options = '-m p2g --bestn 1 --joinfilter 1 --verbose 0 --ryo ">%ti (%tab - %tae) score=%s rank=%r\n%tcs\n" --showcigar no --showvulgar no --showalignment no --refine full'; # --exhaustive';
 
 my %uncompress = ('bz2' => 'bzcat',
 		  'gz'  => 'zcat');
@@ -25,7 +25,7 @@ my @EXPECTED_APPS = qw(FASTQ_TO_FASTA HMMALIGN HMMSEARCH TRANSEQ
                        CDBFASTA CDBYANK PHRAP SREFORMAT 
                        TRIMAL FASTTREE MUSCLE EXONERATE);
 
-$ENV{WISECONFIGDIR} = '/opt/wise/2.4.0/wisecfg';
+$ENV{WISECONFIGDIR} = '/opt/linux/centos/7.x/x86_64/pkgs/genewise/2.4.1/';
 my $app_conf;
 if( $PHYLINGHOME) {
     $app_conf = File::Spec->catfile($PHYLINGHOME, "lib","apps.conf");
@@ -127,7 +127,7 @@ my $in_file = shift @ARGV;
 my (undef,$dir,$fname) = File::Spec->splitpath($in_file);
 
 my $base = $prefix;
-if( ! $prefix && $fname =~ /(\S+)\.(fq|fq|fast\w+|seq)/) {
+if( ! $prefix && $fname =~ /(\S+)\.(fq|fq|fa|fast\w+|seq)/) {
     $base = $1;
 } else {
     $base = $$;
